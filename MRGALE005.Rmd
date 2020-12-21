@@ -1,0 +1,828 @@
+---
+title: "Recommender Systems "
+author: \textcolor{blue}{ALEX MIRUGWE - MRGALE005}
+date: '`r format(Sys.Date(), "%d-%B-%Y")`'
+output: 
+  pdf_document: 
+    fig_caption: yes
+    number_sections: yes
+linkcolor: black
+fontsize: 12pt
+header-includes:
+  - \usepackage{titling}
+  - \pretitle{\begin{center}
+  - \posttitle{\end{center}}
+    \includegraphics[width=2in,height=2in]{C:/Users/User/Documents/logo.jpg}\LARGE\\}
+bibliography: cite.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(tinytex.verbose = TRUE)
+
+```
+
+\pagebreak
+```{r, echo=FALSE}
+knitr::include_graphics("C:/Users/User/Documents/declaration.jpg")
+```
+
+\tableofcontents
+\pagebreak
+
+\newpage
+
+\listoffigures
+\listoftables
+\newpage
+
+# Abstract
+
+The goal of this project was to build recommender systems that predict the rating a user will give to a book and also recommends books to users that they might enjoy, based on their past book evaluations using content-based systems i.e. item-based collaborative filtering, user-based collaborative filtering, and matrix factorization. The accuracy of the matrix factorization recommender system was assessed using cross-validation. These content-based systems recommend books to users based on the cosine similarity distance between books or users.
+
+In User-Based Collaborative Filtering (UBCF), books are recommended assuming that users with similar preferences will rate books similarly. In Item-Based Collaborative Filtering (IBCF), the presumption is that users will prefer books that are similar to other items they like. Information about users and books was stored in a matrix that was modeled and used to make predictions (the recommendations).
+
+The matrix factorization recommender system assessed to find the influence of adding L2 Regularization and bias to it. And it was found that L2 regularization did not improve the performance of the model while adding the bias greatly improved the performance and the lowest RMSE of **0.033** was registered. Finally, a model that ensembles the predictions from UBCF, IBCF, and matrix factorization was created and evaluated using the RMSE.
+
+
+\newpage
+
+```{r  echo=FALSE,cache=FALSE, results=FALSE, warning=FALSE, include=FALSE, warning=FALSE}
+#Loading neccessary libraries
+library(tidyverse) #dplyr
+library(ggplot2) #visualization
+library(gridExtra)
+library(corrplot) #correlation matrix 
+library(data.table)
+library(stringr)
+library(reshape2)
+library(DT)
+library(coop) #consine similarity
+library(h2o) #model  ensembling
+
+```
+
+# Introduction
+
+In this assignment, we used a modified version of the Book-Crossing dataset that contains ratings of 10,000 users to different 150 books on a scale of 0 - 10. The dataset had 3 objects i.e. book ratings, book information, and user information that includes variables for Users, books, and identification codes. The book ratings data frame contained a unique ID variable for identifying users, a unique ID variable for identifying books, and the book ratings. This data frame had many zeros that were replaced by NAs(meaning unread books). The book info data frame contained the Book titles and authors for each ISBN. Finally, the user info data frame contained additional demographic information (Age) for some users.
+
+These three (3) data frames were explored and interesting hidden insights were discovered and presented in the next section. After the exploration of the data set, recommender systems were built to provide recommendations both for existing users and for a new user. We further evaluated and assessed these recommendation models. In this report, we discuss the recommendation system modeling and performance evaluation.
+
+
+# Exploratory Data Analysis
+
+In this section, we explore and process the data to obtain useful insights and even prepare that data in a sense that will help us to build the best book recommendation models.
+
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE}
+load("G:/UCT-MSc._Data_Science/Year1/Semester2/Data Science for industry/Assignment/Assignment 1/book_ratings.Rdata")
+
+#replacing 0s with NAs in the book rating data set
+book_ratings$Book.Rating[book_ratings$Book.Rating == 0] <- NA
+```
+
+
+```{r  echo=FALSE, warning=FALSE, fig.width=4,fig.height=3,fig.cap= " Shows how book ratings are distributed and most of the ratings are between 6 and 10. A small portion of the books were rated between 1 and 4. "}
+#Book ratings distribution histogram
+ggplot(book_ratings, aes(Book.Rating)) +
+  geom_histogram(binwidth = .5,fill = "bisque4") + 
+  labs(x= "Frequency",y = "Book Ratings",title = "Distribution of Book Ratings")+
+   theme(plot.title = element_text(hjust = 1)) +
+  theme_classic()
+
+```
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE}
+#omitting  NA book rating
+vector_ratings <- as.vector(na.omit(book_ratings$Book.Rating))
+unique(vector_ratings)
+
+#Lets count the occurrencesof each of rating.
+table_ratings <- table(vector_ratings)
+table_ratings 
+```
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE}
+#average ratings per book
+book_ratings %>%
+  select(ISBN,Book.Rating)%>%
+  group_by(ISBN)%>%
+  summarise(Average = mean(Book.Rating,na.rm = TRUE))%>%
+  arrange(desc(Average))%>%
+  left_join(book_info,by = "ISBN")%>%
+  head(10)
+```
+
+
+|Book Title                                |Book.Author      |Average Rating|
+|------------------------------------------|-----------------|--------------|
+|Harry potter and the order of the phoenix |J.K.Rowling      |9.05          |
+|To kill a mockingbird                     |Harper Lee       |9.02          |
+|Harry potter and the sorcerer's stone     |J.K.Rowling      |8.98          |
+|Harry potter and the chamber of secrets   |J.K.Rowling      |8.85          |
+|The hobbit : lord of the rings            |J.R.R.Tolkien    |8.83          |
+|The fellowship of the ring                |J.R.R.Tolkien    |8.77          |
+|Seabiscuit: an american legend            |Laura Hillenbrand|8.76          |
+|Fahrenheit 451                            |Ray Bradbury     |8.69          |
+|A prayer for owen meany                   |John Irving      |8.63          |
+|The handmaid's tale                       |Margaret Atwood  |8.58          |
+
+Table: Showing the top ten books with the highest average ratings.
+
+At first glance, J.K.Rowling books were the most highly rated books, the author had three books in the ten highly-rated books. In all the 150 books, *Harry potter and the order of the phoenix* has the highest average rating of *9.05* followed by Harper's *To kill a mockingbird * and so on as shown in the table above.
+
+
+```{r  echo=FALSE, warning=FALSE, fig.width=4,fig.height=3,fig.cap= "Boxplot showing Age Distribution of book purchasers. It's seen from the plot that there exist outliers in the Age variable as some users are older than 150 years which sounds naturally unrealistic."}
+#boxplot age distribution
+ggplot(user_info,aes(Age))+
+  geom_boxplot(fill = "blue") +
+  labs(title = "Boxplot showing Age Distribution") +
+  theme_classic()
+
+```
+
+For all persons with more than 100years, their age values were replaced by the overall average value of the age variable in the user info dataset.
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE}
+#replacing age>100years with mean age
+user_info$Age[user_info$Age > 100] <- mean(user_info$Age,na.rm = TRUE)
+
+#range of the age variable
+range(user_info$Age,na.rm = TRUE)
+
+```
+
+```{r  echo=FALSE, warning=FALSE, fig.height=3,fig.width=3,fig.cap="The histogram shows the age distribution of people who rated the books. It's observed that most of the users were between 20 to 50 years old."}
+#Age ditribution histogram
+ggplot(user_info,aes(Age))+
+  geom_histogram(binwidth = 3,fill = "chocolate3") +
+  labs(title = "Age Distribution") +
+  theme_classic() 
+
+```
+
+
+
+```{r  echo=FALSE, warning=FALSE,include=FALSE}
+#merging data frames
+age_info <- left_join(book_ratings,book_info,by = "ISBN")
+age_info <- left_join(age_info,user_info,by = "User.ID")
+
+#filtering out users who are 18 years and below
+age_info1 <- age_info%>%
+  select(Book.Title,Age)%>%
+  filter(Age<18)
+
+#converting book titles to factor category
+age_info1$Book.Title <- as.factor(age_info1$Book.Title) 
+#counting the number of times a book has been read
+age_info1 <- age_info1%>%
+  group_by(Book.Title)%>%
+  count()%>%
+  arrange(desc(n))
+
+head(age_info1,10)
+```
+
+|Book Title                               |No. of Book readings|
+|-----------------------------------------|--------------------|
+|wild animus                              |51                  |
+|harry potter and the sorcerer's stone    |25                  |
+|the lovely bones                         |21                  |
+|to kill a mockingbird                    |19                  |
+|the fellowship of the ring               |18                  |
+|harry potter and the order of the phoenix|17                  |
+|harry potter and the chamber of secrets  |16                  |
+|the hobbit                               |16                  |
+|interview with the vampire               |15                  |
+|fahrenheit 451                           |11                  |
+
+Table: Shows the top ten books that were read by users below 18 years of age.
+
+\newpage
+
+```{r  echo=FALSE, warning=FALSE,include=FALSE}
+#merging data frames
+above_18 <- left_join(book_ratings,book_info,by = "ISBN")
+above_18 <- left_join(age_info,user_info,by = "User.ID")
+
+#filtering out users who are 18 years and above
+above_18_1 <- above_18%>%
+  select(Book.Title,Age.x)%>%
+  filter(Age.x>=18)
+
+#converting book titles to factor category
+above_18_1$Book.Title <- as.factor(above_18_1$Book.Title) 
+
+#counting the number of times a book has been read
+above_18_1 <- above_18_1%>%
+  group_by(Book.Title)%>%
+  count()%>%
+  arrange(desc(n))
+
+head(above_18_1,10)
+```
+
+|Book Title                               |No. of Book readings|
+|-----------------------------------------|--------------------|
+|wild animus                              |1185                |
+|the lovely bones                         |739                 |
+|the da vinci code                        |565                 |
+|the nanny diaries: a novel               |471                 |
+|divine secrets of the ya-ya sisterhood   |445                 |
+|angels &amp; demons                      |396                 |
+|the red tent                             |383                 |
+|the secret life of bees                  |369                 |
+|the firm                                 |345                 |
+|the pelican brief                        |343                 |
+
+Table: Shows the top ten books that were read by users above 18 years of age.
+
+Looking *Table 2* and *Table 3*, it's observed that *wild animus* book is the most popular book for both users below and above 18 years of age. But it's also seen that there are some different preferences in books read by users below 18 years and those above.
+
+\newpage
+
+# Recommended Systems.
+
+The three data frames were joined into a single dataset and users who had not read at least 4 books, and books that were not rated more than 5 times were removed from the data set because for collaborative filtering it is better to have more ratings per user [@rpubs-data_61202].
+ 
+## Popularity Recommendation.
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE}
+#merging the book_ratings and book_info into a single set
+book_ratings1 <- left_join(book_ratings,book_info,by = "ISBN")
+#extracting unique User IDs and book ISBNs 
+dimension_names <- list(user_id = sort(unique(book_ratings$User.ID)), book_id = sort(unique(book_ratings$ISBN)))
+#spread the data frame into a wide matrix
+rating_dim <- spread(select(book_ratings1, ISBN, User.ID, Book.Rating), ISBN, Book.Rating) 
+
+
+sorted_books_users <- as.character(unlist(rating_dim[,1]))
+rated_books <- as.matrix(rating_dim[,-1])
+row.names(rated_books) <- sorted_books_users
+
+rated_books <- ifelse(is.na(rated_books),0,1)
+
+
+#Top 20 books based on number of ratings
+top_book <- book_ratings1 %>%
+  group_by(Book.Title) %>%
+  summarize(count=n(), .groups = "drop") %>%
+  top_n(20,count) %>%
+  arrange(desc(count))
+
+#renaming long book titles to shorter names
+top_book$Book.Title[top_book$Book.Title == "the lovely bones: a novel"] <- "the lovely bones"
+top_book$Book.Title[top_book$Book.Title == "the nanny diaries: a novel"] <- "the nanny diaries"
+top_book$Book.Title[top_book$Book.Title == "divine secrets of the ya-ya sisterhood: a novel"] <- "divine secrets"
+top_book$Book.Title[top_book$Book.Title == "the red tent (bestselling backlist)"] <- "the red tent"
+top_book$Book.Title[top_book$Book.Title == "snow falling on cedars"] <- "snow falling"
+top_book$Book.Title[top_book$Book.Title == "angels &amp; demons"] <- "angels &amp"
+top_book$Book.Title[top_book$Book.Title == "where the heart is (oprah's book club (paperback))"] <- "where the heart is"
+top_book$Book.Title[top_book$Book.Title == "harry potter and the sorcerer's stone (harry potter (paperback))"] <- "harry potter"
+
+```
+
+
+```{r  echo=FALSE, warning=FALSE, fig.width=10,fig.cap="Show the top 20 books based on the number of ratings. Numbers on bars indicate the total number of ratings."}
+
+#plot a bar plot for the top 20 books based on number of ratings
+top_book %>% 
+  ggplot(aes(x=reorder(Book.Title, count), y=count)) +
+  geom_bar(stat='identity', fill="tomato3") + coord_flip() +
+  labs(x="", y="Number of ratings") +
+  geom_text(aes(label= count), hjust=-0.1, size=3) +
+  labs(title="Top 20 books based on number of ratings") +theme_classic()
+```
+
+
+When we look at *Table 1* and the Barchart above, it's observed that the most highly rated books (by average) are not the ones with the highest number of ratings. The *Harry potter and the order of the phoenix* book received the highest average ratings and *Wild animus* got the highest number of ratings.
+
+If a high Item popularity recommendation approach is used, a user could be recommended books shown by the bar chart in the figure above. 
+
+## User-based collaborative filtering (UBCF).
+
+Under, UBCF we developed a model that groups users according to their rating history and then recommend a book to a particular user depending on what a similar user read. So, the ratings are predicted by first finding a neighborhood of similar users and then aggregating the user ratings to form a prediction [@gorakala_usuelli_2015].  The assumption of UBCF is that similar users will rate movies similarly. 
+
+A data set of books ISBN, unique user IDs, and ratings was formed. This data set was transformed and transposed to have book titles as row names, user IDs as column names, and ratings as values to form a data set of 2298 observations (unique user IDs) and 150 variables (unique book ISBN). The data set was binarized, where 0s meant either a book was not rated or a book with a rating below 5.  5 was the threshold used to eliminate lower ratings i.e. a books with a rating below 5 is equivalent to not having been rated. 1s represented books with ratings between 5 (threshold value) and 10.
+
+Using the cosine similarity method, similarity distances between user pairs were produced. And this similarity matrix was used to recommend books to users. Books that a particular user has not read, but read by the most similar users are recommended to him/her.
+
+
+```{r  echo=FALSE, warning=FALSE,include=FALSE}
+book_ratings1 <- left_join(book_ratings1,user_info, by = "User.ID")
+#removing users who made less 4 ratings and books with less 5 rating counts
+selected_book_rating <- book_ratings1 %>% group_by(User.ID) %>% filter(n()>4) %>% group_by(ISBN) %>% filter(n()>5)
+
+
+#Number of Unique ISBNs after filtering
+length(unique(selected_book_rating$ISBN)) 
+
+#Number of Unique Users after filtering
+length(unique(selected_book_rating$User.ID)) 
+
+
+#extracting out unique User IDs and book ISBNs
+dimension_names <- list(user_id = sort(unique(selected_book_rating$User.ID)), 
+                        book_id = sort(unique(selected_book_rating$ISBN)))
+
+#creating spread-wide data frame
+selected_book_rating1 <- spread(select(book_ratings, ISBN, User.ID, Book.Rating), ISBN, Book.Rating) 
+
+#removing the first column
+sorted_books_users <- as.character(unlist(selected_book_rating1[,1]))
+rated_book <- as.matrix(selected_book_rating1[,-1])
+#making user IDs as rownames.
+row.names(rated_book) <- sorted_books_users
+
+dim(rated_book)
+
+# Taking a transpose to have book (rows) by user (columns)
+rated_book1 <-  t(rated_book)
+
+dim(rated_book)
+
+bookIds <- unique(book_info$ISBN) # unique books in book data
+bookIdsRated <- unique(selected_book_rating$ISBN) # unique books actually rated 
+book_info2 <- book_info[which((bookIds %in% bookIdsRated) == TRUE),] # Keep in the book data only those                                                                                      # rated , saved this in new book data 
+# Store the isbns as rownames
+rownames(book_info2) <- book_info2$ISBN
+
+```
+
+
+```{r  echo=FALSE, warning=FALSE,include=FALSE}
+#merging data frames
+book_ratings1 <- left_join(book_ratings,book_info,by = "ISBN")
+dimension_names <- list(user_id = sort(unique(book_ratings$User.ID)), book_id = sort(unique(book_ratings$ISBN)))
+book_ratings1 <- left_join(book_ratings1,user_info, by = "User.ID")
+
+#removing users who made less 4 ratings and books with less 5 rating counts
+selected_book_rating <- book_ratings1 %>% group_by(User.ID) %>% filter(n()>4) %>% group_by(ISBN) %>% filter(n()>5)
+
+# Generating the user-item matrix for the predictor 
+book_rating_cast <- dcast(selected_book_rating, User.ID~Book.Title, 
+                   value.var = "Book.Rating", fill=0, fun.aggregate = mean)
+#renaming a variable name
+book_rating_cast <- rename(book_rating_cast, `don't sweat the small stuff and it's all small stuff` = `don't sweat the small stuff and it's all small stuff : simple ways to keep the little things from taking over your life (don't sweat the small stuff series)`)
+
+# Filling in rownames
+rownames(book_rating_cast) = book_rating_cast$User.ID
+
+sorted_my_users1 <- as.character(unlist(book_rating_cast[,1]))
+#removing the first column
+book_rating_cast <- as.matrix(book_rating_cast[,-1])
+#making the first column row names
+row.names(book_rating_cast) <- sorted_my_users1
+
+#matrix factorization dataset
+selected_books <- book_rating_cast
+
+#binarizing the ratings: Ratings above 5 were replaced by 1s and ones below 0 were replaced by 0s.
+book_rating_cast <- ifelse(book_rating_cast>=5,1,0)
+
+#transposing the data matrix
+book_rating_cast1 <- t(book_rating_cast)
+
+#user-to-user similarity distance
+set.seed(123)
+user_book_similirities <- cosine(book_rating_cast1)
+
+sim <- user_book_similirities[7:11,7:11]
+
+round(sim,3)
+```
+
+|     | 1075  | 1131 | 1424 |  1435|1848  |
+|-----|-------|------|------|------|------|
+|1075 | 1.000 |0.000 |0.000 |0.000 |0.000 |
+|1131 | 0.000 |1.000 |0.000 |0.204 |0.000 |
+|1424 | 0.000 |0.000 |1.000 |0.000 |0.000 |
+|1435 | 0.000 |0.204 |0.000 |1.000 |0.000 |
+|1848 | 0.000 |0.000 |0.000 |0.000 |1.000 |
+
+Table: Shows the cosine similarities between a few users extracted out of the 150 user similarity matrix.
+
+```{r  echo=FALSE, warning=FALSE,include=FALSE,eval=FALSE}
+#replacing NAs with 0s
+user_book_similirities[is.nan(user_book_similirities)] <- 0
+
+
+#booking recommendation system function to any user.
+user_book_recommendations <- function(user, user_similarity, read_books){
+  
+  # converting users into characters
+  user <- ifelse(is.character(user), user, as.character(user))
+  
+  #getting book scores
+  user_scores <- data.frame(title = colnames(read_books), 
+                            score = as.vector(user_similarity[user,] %*% read_books), 
+                            seen = as.vector(read_books[user,]))
+  
+  # extracting unread books
+  user_scores %>% 
+    filter(seen == 0) %>% 
+    arrange(desc(score)) %>% 
+    select(-seen)
+}
+
+#book recommendations to user 243
+user_book_recommendations(user = 243, user_similarity = user_book_similirities, read_books = book_rating_cast)
+```
+
+
+|Title                    |Score    |
+|-------------------------|---------|
+|The lovely bones: a novel|11.429434|
+|Where the heart is       |7.4552777|
+|the red tent             |7.0725130|
+|the secret life of bees  |6.8744890|
+|good in bed              |6.5228067|
+
+Table: Shows the top five books that can be recommended to user 243.
+
+Using our UBCF model, we recommended unread books to user 243 and the books in the table above (*table 5*) were read by users more similar to 243. Scores are the sum of similarities between user 243 and other users in terms of the same rated books.
+
+We continued to use the model to recommend books to more five users and the results are shown in *Table 6* below.
+
+\newpage
+
+|User     |Recommended Books                                                 |
+|---------|----------------------------------------------------------------- |
+|638      |angels &amp; demons,the nanny diaries: a novel,the red tent       |     
+|         |he secret life of bees,good in bed.                               |
+|         |                                                                  |
+|2766     |the pelican brief,the da vinci code,                              |
+|         |the lovely bones:a novel,the red tent,the partner.                |
+|         |                                                                  |
+|4622     |1st to die: a novel,2nd chance,a bend in the road,                |
+|         |a child called ,a heartbreaking work of staggering genius.        |
+|         |                                                                  |
+|8066     |the lovely bones: a novel,the red tent,the da vinci code,         |
+|         |the nanny diaries: a novel,divine secrets of the ya-ya sisterhood.|
+|         |                                                                  |
+|11676    |divine secrets of the ya-ya sisterhood,the secret life of bees,   |
+|         |the pilot's wife :a novel,the firm,girl with a pearl earring.     |
+
+Table: Shows the top five books that can be recommended to different users.
+
+
+## Item-based collaborative filtering (IBCF)
+
+The created binarized data set was transposed to have Book titles as row names and user IDs as column names. Using the cosine similarity method, similarity distances between book pairs were produced. The IBCF model works in way;
+
+- For every two books, measure how similar they are in terms of having received similar ratings by similar users. - For each book, identify the k-most similar books.
+- For each user, identify the unread books that are most similar to the user's purchases.
+
+We produced a similarity matrix between all the 150 books and a snapshot of some of the similarity distances is shown in the table below.
+
+\newpage
+
+```{r  echo=FALSE, warning=FALSE,include=FALSE}
+set.seed(123)
+#book-to-book similirity distance
+book_similirities <- cosine(book_rating_cast)
+
+#extraction of a matrix section
+similirity <- book_similirities[7:11,7:11]
+#rounding off distances to 3-digits
+similirity <- round(similirity,3)
+
+```
+
+
+|                   |  a map of the world| a painted house| a prayer for owen|  a time to kill|a walk to remember|
+|------------------ |--------------------|----------------|------------------|----------------|------------------|
+|a map of the world | 1.000              |   0.059        |  0.050           | 0.042          |0.076             |
+|a painted house    | 0.059              |   1.000        |  0.038           | 0.105          |0.085             |
+|a prayer for owen  | 0.050              |   0.038        |  1.000           | 0.047          |0.048             |
+|a time to kill     | 0.042              |   0.105        |  0.047           | 1.000          |0.067             |
+|a walk to remember | 0.076              |   0.058        |  0.048           | 0.067          |1.000             |
+
+Table: Shows a snapshot of cosine similarity distance between five books.
+
+```{r  echo=FALSE, warning=FALSE,include=FALSE,eval=FALSE}
+set.seed(123)
+# a function to generate an item-based recommendation for any user
+book_recommendations <- function(user, book_sim, read_bo){
+  
+  # turn into character if not already
+  user <- ifelse(is.character(user), user, as.character(user))
+  
+  # get scores
+  read_books <- row.names(book_sim)[read_bo[user,] == TRUE]
+  book_user_scores <- tibble(title = row.names(book_sim), 
+                        score = apply(book_sim[,read_books,drop=F], 1, sum),
+                        seen = read_bo[user,])
+  
+  # sort unseen movies by score and remove the 'seen' column
+  book_user_scores %>% 
+    filter(seen == 0) %>% 
+    arrange(desc(score)) %>% 
+    select(-seen)
+}
+
+#extracting books that could be receommended to user 243
+user_243 <- book_recommendations(user = 388, book_sim = book_similirities, read_bo  = book_rating_cast)
+#getting the top five books
+head(user_243,5)
+
+#recommendation to all users in the data set.
+lapply(sorted_my_users1, book_recommendations, book_similirities, book_rating_cast)
+```
+
+
+|Title                    |Score    |
+|-------------------------|---------|
+|The lovely bones: a novel|0.5218324|
+|Where the heart is       |0.4966969|
+|The book of Ruth         |0.4844690|
+|We were the mulvaneys    |0.4681798|
+|I know this much is true |0.4652047|
+
+Table: Shows the top five books in terms of scores that would be recommended to user 243.
+
+The books in the table above, have the highest sum of similarities (i.e. scores) between the books read by user 243 and the rest of the unread books. The *The lovely bones: a novel* is top on the list for recommendation to user 243.
+
+Looking at *table 5* and *table 8*, both UBCF and IBCF models recommend user 243 books ***The lovely bones: a novel*** and ***Where the heart is***. These two books have the highest score in both models.
+
+In the table, we continued to use our model to recommend books to different users basing on the similarity distances between books read a particular user and those he/she hasn't read.
+
+\newpage
+
+|User  |Recommended Books                                        |
+|------|-------------------------------------------------------- |
+|388   |the bridges of madison county,watership down,            |     
+|      |interview with the vampire,sphere,congo.                 |
+|      |                                                         |
+|2766  |b is for burglars,bridget jones's diary,                 |
+|      |good in bed,tara road,empire falls.                      |
+|      |                                                         |
+|3556  |the lovely bones,deception point,I know this much is true|
+|      |the red tent ,the five people you meet in heaven.        |
+|      |                                                         |
+|4017  |where the heart is,house of sand and fog, the red tent   |
+|      |empire falls,the pilot's wife : a novel.                 |
+|      |                                                         |
+|5439  |one for the money,the lovely bones: a novel,the red tent,|
+|      |wicked,good in bed.                                      |
+
+Table: Shows the top five books that can be recommended to different users.
+
+Using the IBCF model, we predicted the top five unread books that could be recommended to users 388, 2766, 3556, 4017, and 5439. The model can recommend any book to a user based on similarities between books read by similar users.
+
+## Matrix Factorization
+
+Matrix Factorization exploits the similarities between the user's preferences and interactions to provide a book recommendation to a particular user.
+
+This model works in a way that if we consider user 243 who has not read *the lovely bones* book and we would like to know if he/she will like it. The model finds a user with similar preferences to user 243, and then takes the rating given to *the lovely bones* by that user and assume it to be the rating by user 243 for that particular book. Using this rating obtained from the user dependency, we can tell if user 243 will like *the lovely bones* book or not. 
+
+We used a user matrix of 100 users, an item matrix of 150 books, and 10 latent factors to obtain a rating matrix represented as a dot product of user and item matrix. The model learns to find latent factors to factorize the rating matrix. To arrive at the best approximation of the factors, RMSE(root mean squared error) is the cost function to be minimized [@venkateswaran_senthilkumar_prabhu_thandapani_2019].
+
+The best value was **1.036** and the model converged after 100000000 iterations.
+
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE,eval=FALSE}
+df <- selected_books 
+df[df == 0] <- NA
+#extracting 50 books and 100 users
+df <- df[1:50,1:100]
+
+accuracy <- function(x, real_ratings){
+    
+  #user and book factors 
+  #first 100 elements are latent factors for users and 150 elements for books
+  user_factors <- matrix(x[1:100], 50, 10)
+  book_factors <- matrix(x[101:250], 10, 100)
+ 
+  #The user-book:- interactionpredictions for users and book factors from dot products
+  predictions <- user_factors %*% book_factors
+  
+  #sum of squared errors of over all rated books
+  errors <- (real_ratings - predictions) ^ 2 
+  
+  sqrt(mean(errors[!is.na(real_ratings)]))  
+}
+
+
+set.seed(123)
+# optimization step
+rec <- optim(par = runif(280), accuracy, 
+            real_ratings = df, control = list(maxit = 100000000))
+rec$convergence
+rec$value
+
+```
+
+
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE,eval=FALSE}
+# extract optimal user factors
+user_factors <- matrix(rec$par[1:100], 50, 10)
+# extract optimal book factors
+book_factors <- matrix(rec$par[101:250], 10, 100)
+
+set.seed(123)
+#getting predictions of user 1
+predicted_ratings <- user_factors %*% book_factors
+rbind(round(predicted_ratings[1,], 1), as.numeric(df[1,]))
+
+#RMSE
+error <- (df - predicted_ratings)^2 
+sqrt(mean(error[!is.na(df)]))
+```
+
+|Actual      |Predicted|
+|------------|---------|
+|NA          |5.2      |
+|**7.0**     |**7.4**  |
+|NA          |3.5      |
+|NA          |8.3      |
+|NA          |7.1      |
+|**7.0**     |**6.9**  |
+|NA          |6.2      |
+|NA          |6.8      |
+|NA          |4.9      |
+|NA          |9.1      |
+
+Table: Shows the actual and predicted top ten ratings.
+
+Using our model, we predicted the ratings of a certain user, and looking at the table above the two available actual ratings are almost correctly predicted. But the available actual present ratings are few, therefore we cannot rely on our model. 
+
+The Root Mean Square Error (RMSE) value of the model was **1.036**. The RMSE was calculated only for the ratings that were present in the rating matrix. This error was minimized by adding L2 regularization which is explained in detail below.
+ 
+
+### Adding L2 regularization
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE,eval=FALSE}
+#adds L2 regularization
+model_evaluation <- function(x, available_ratings, lambda){
+  
+  
+  #user factors
+  user_factors <- matrix(x[1:100], 50, 10)
+  #book factors
+  book_factors <- matrix(x[101:250], 10, 100)
+  
+  #getting predictions
+  predicted_ratings <- user_factors %*% book_factors
+  
+  #RMSE
+  errors <- (available_ratings - predicted_ratings) ^ 2 
+  
+  # L2 norm penalizes large parameter values
+  penalty <- sqrt(sum(user_factors^2, book_factors^2))
+  
+  # model accuracy contains an error term and a weighted penalty 
+  accuracy <- sqrt(mean(errors[!is.na(available_ratings)])) + lambda * penalty
+  
+  return(accuracy)
+}
+
+
+set.seed(123)
+# optimization step
+rec_l2 <- optim(par = runif(280), model_evaluation, 
+            lambda = 3e-2, available_ratings = df, control = list(maxit = 100000000))
+rec_l2$convergence
+rec_l2$value
+```
+
+Adding the L2 Regularization seems not to have improved the model's performance as the RMSE value (i.e of **1.036**) remains the same as before adding the regularization features. This means adding L2 Regularization has no significant influence on the performance of the model. And the best value (2.242) of the L2 regularized model is worse than that of the non regularized model which was 1.036.
+ 
+
+```{r, warning=FALSE, include=FALSE,eval=FALSE}
+# extract optimal user factors
+user_factors <- matrix(rec$par[1:100], 50, 10)
+# extract optimal book factors
+book_factors <- matrix(rec$par[101:250], 10, 100)
+
+# get predicted ratings
+predicted_ratings <- user_factors %*% book_factors
+
+# check accuracy
+errors <- (df - predicted_ratings) ^ 2 
+sqrt(mean(errors[!is.na(df)]))
+```
+
+### Adding bias terms
+
+
+```{r, warning=FALSE, include=FALSE,eval=FALSE}
+##adding bias term for each user and book
+model_evaluation_bias <- function(x, available_ratings, lambda){
+  # extract user and book factors and bias terms 
+  
+  #user factors
+  user_factors <- matrix(x[1:100], 50, 10)
+  #user factors
+  book_factors <- matrix(x[101:300], 10, 100)
+  
+  # the bias vectors are repeated to make the later matrix calculations easier 
+  user_bias <- matrix(x[301:350],nrow = 50, ncol = 100)
+  book_bias <- t(matrix(x[351:450], nrow = 100, ncol = 50))
+  
+  # get predictions from dot products + bias terms
+  predicted_ratings <- user_factors %*% book_factors + user_bias + book_bias
+  
+  errors <- (available_ratings - predicted_ratings) ^ 2 
+  
+  # L2 norm penalizes large parameter values (note not applied to bias terms)
+  penalty <- sqrt(sum(user_factors ^ 2, book_factors ^ 2))
+  
+  # model accuracy contains an error term and a weighted penalty 
+  sqrt(mean(errors[!is.na(available_ratings)])) + lambda * penalty
+}
+```
+
+
+
+```{r,warning=FALSE, include=FALSE,eval=FALSE}
+set.seed(123)
+# optimization step 
+rec_bias <- optim(par = runif(500), model_evaluation_bias,
+              available_ratings = df, lambda = 3e-2, control = list(maxit = 10000000))
+rec_bias$convergence
+rec_bias$value
+```
+
+
+```{r,warning=FALSE, include=FALSE,eval=FALSE}
+# extract optimal user and book factors and bias terms
+user_factors <- matrix(rec3$par[1:100], 50, 10)
+book_factors <- matrix(rec3$par[101:300], 10, 100)
+user_bias <- matrix(rec3$par[301:350],nrow = 50, ncol = 100)
+book_bias <- t(matrix(rec3$par[351:450], nrow = 100, ncol = 50))
+
+# get predicted ratings
+predicted_ratings <- user_factors %*% book_factors + user_bias + book_bias
+
+# check accuracy
+errors <- (df - predicted_ratings) ^ 2 
+sqrt(mean(errors[!is.na(df)]))
+```
+
+Bias terms describe the effect of one dimension on the output. The bias of a book would describe how well a book is rated compared to the average, across all books. This depends only on the book (as a first approximation) and does not take into account the interaction between a user and the book. Similarly, a user's bias corresponds to that user's tendency to give better or worse ratings than the average [@wiggers_2020]. And the interaction term describes the interaction between the user and the book, ie. the user's preference for a given book.
+
+And we integrated a bias term to remove "bias" given by users (or the bias for a book). And this tremendously improved the performance of our model compared to the L2 regularized model and the initial model. The RMSE value dropped to **0.033** which is quite small.
+
+```{r,warning=FALSE, include=FALSE,eval=FALSE}
+book <- book_rating_cast[1:100,1:50]
+x <- data.frame(Book_Title = colnames(book), Bias =book_bias[1,]) %>% arrange(desc(Bias))
+head(x,10)
+
+```
+
+|Book Title                               |Bias    |
+|-----------------------------------------|--------|
+|deception point                          |13.17772|
+|angela's ashes                           |8.805229|
+|angela's ashes                           |7.761782|
+|along came a spider                      |7.382359|
+|harry potter and the chamber of secrets  |6.182824|
+|don't sweat the small stuff              |6.110707|
+|bel canto: a novel                       |5.077487|
+|a painted house                          |4.615190|
+|a heartbreaking work of staggering genius|4.252443|
+|a time to kill                           |4.039669|
+
+Table: Shows the top ten books with the highest bias terms.
+
+```{r,warning=FALSE, include=FALSE,eval=FALSE}
+# check predictions for one user
+rbind(round(predicted_ratings[1,], 1), as.numeric(df[1,]))
+```
+
+|Actual      |Predicted|
+|------------|---------|
+|NA          |5.2      |
+|**7.0**     |**7.0**  |
+|NA          |3.5      |
+|NA          |8.3      |
+|NA          |7.1      |
+|**7.0**     |**7.0**  |
+|NA          |6.2      |
+|NA          |6.8      |
+|NA          |4.9      |
+|NA          |9.1      |
+
+Table: Shows Actual and Predicted ratings using model with user and book bias terms.
+
+Comparing *Table 10* and *Table 12*, it's seen that the model with a bias term component included performs better than the one without it. The prediction accuracy of the model 100% with book and user bias terms i.e. the actual ratings equal to predicted ratings.
+
+
+# Conclusion
+
+We can conclude by saying that the performance of the UBCF, IBCF, and Matrix Factorization was quite good with the lower RMSE registered as **0.033**. This RMSE was obtained after adding a bias component to the matrix factorization model.
+
+
+\newpage
+# Appendix 
+
+```{r  ref.label=knitr::all_labels(), echo=TRUE,eval=FALSE}
+
+```
+
+\newpage
+
+# References
